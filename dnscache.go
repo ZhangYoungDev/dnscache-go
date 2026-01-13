@@ -59,6 +59,17 @@ type Config struct {
 	// DialStrategy controls how the resolver iterates through IP addresses when dialing.
 	// Default is DialStrategyRandom.
 	DialStrategy DialStrategy
+
+	// DNSServer specifies a custom DNS server address (e.g., "8.8.8.8:53").
+	// If empty, uses the system default resolver.
+	// This option is ignored if Upstream is set.
+	DNSServer string
+
+	// Upstream allows using a custom DNS resolver implementation.
+	// This can be used for DoH (DNS over HTTPS), DoT (DNS over TLS),
+	// or any custom DNS resolution logic.
+	// If nil, uses the system default resolver (or DNSServer if specified).
+	Upstream DNSResolver
 }
 
 // DNSResolver is the interface for the upstream DNS resolver.
@@ -110,6 +121,22 @@ func New(config Config) *Resolver {
 		cache:    newMemoryCache(),
 		config:   config,
 		stop:     make(chan struct{}),
+	}
+
+	// Set upstream resolver based on configuration priority:
+	// 1. Custom Upstream implementation (highest priority)
+	// 2. Custom DNSServer address
+	// 3. System default resolver (fallback)
+	if config.Upstream != nil {
+		r.upstream = config.Upstream
+	} else if config.DNSServer != "" {
+		r.upstream = &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+				d := net.Dialer{}
+				return d.DialContext(ctx, network, config.DNSServer)
+			},
+		}
 	}
 
 	if config.CleanupInterval > 0 {

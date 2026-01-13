@@ -530,3 +530,88 @@ func TestDialStrategy(t *testing.T) {
 		}
 	})
 }
+
+func TestCustomUpstream(t *testing.T) {
+	// Create a mock resolver that returns specific IPs
+	mock := &mockDNSResolver{
+		lookupHostFunc: func(ctx context.Context, host string) ([]string, error) {
+			return []string{"10.0.0.1", "10.0.0.2"}, nil
+		},
+	}
+
+	r := New(Config{
+		Upstream: mock,
+	})
+
+	// Verify the mock is used
+	ips, err := r.LookupHost(context.Background(), "any.domain.com")
+	if err != nil {
+		t.Fatalf("LookupHost failed: %v", err)
+	}
+
+	if len(ips) != 2 || ips[0] != "10.0.0.1" || ips[1] != "10.0.0.2" {
+		t.Errorf("Expected mock IPs [10.0.0.1, 10.0.0.2], got %v", ips)
+	}
+}
+
+func TestCustomDNSServer(t *testing.T) {
+	// This test verifies that the DNSServer config creates a custom resolver
+	// We can't easily test actual DNS resolution without a real server,
+	// so we just verify the configuration is applied correctly.
+	r := New(Config{
+		DNSServer: "8.8.8.8:53",
+	})
+
+	// Verify upstream is not the default resolver
+	if r.upstream == net.DefaultResolver {
+		t.Error("Expected custom resolver to be created when DNSServer is set")
+	}
+
+	// Verify it's a *net.Resolver (not ipVersionResolver or mockDNSResolver)
+	if _, ok := r.upstream.(*net.Resolver); !ok {
+		t.Error("Expected *net.Resolver when DNSServer is set")
+	}
+}
+
+func TestUpstreamPriority(t *testing.T) {
+	// Custom Upstream should take priority over DNSServer
+	mock := &mockDNSResolver{
+		lookupHostFunc: func(ctx context.Context, host string) ([]string, error) {
+			return []string{"192.168.1.1"}, nil
+		},
+	}
+
+	r := New(Config{
+		DNSServer: "8.8.8.8:53", // This should be ignored
+		Upstream:  mock,         // This should be used
+	})
+
+	// Verify mock is used (not the DNSServer)
+	ips, err := r.LookupHost(context.Background(), "test.com")
+	if err != nil {
+		t.Fatalf("LookupHost failed: %v", err)
+	}
+
+	if len(ips) != 1 || ips[0] != "192.168.1.1" {
+		t.Errorf("Expected mock IP [192.168.1.1], got %v", ips)
+	}
+}
+
+func TestCustomDNSServerIntegration(t *testing.T) {
+	// Integration test using Google's public DNS
+	// Skip if network is unavailable
+	r := New(Config{
+		DNSServer: "8.8.8.8:53",
+	})
+
+	ips, err := r.LookupHost(context.Background(), "example.com")
+	if err != nil {
+		t.Skipf("Skipping integration test (network unavailable): %v", err)
+	}
+
+	if len(ips) == 0 {
+		t.Error("Expected at least one IP from custom DNS server")
+	} else {
+		t.Logf("Resolved example.com via 8.8.8.8: %v", ips)
+	}
+}

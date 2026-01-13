@@ -23,6 +23,8 @@ While heavily inspired by existing solutions like `rs/dnscache`, this library in
 - **Observability**: Built-in metrics (`CacheHits`/`CacheMisses`), `OnCacheMiss` hook, and `httptrace` support.
 - **Dynamic Updates**: `OnChange` hook allows reacting to IP changes in real-time (e.g., for service discovery).
 - **Trace Support**: Respects `httptrace.ClientTrace` context for detailed performance analysis.
+- **Custom DNS Server**: Supports custom DNS server addresses (e.g., `8.8.8.8:53`, `1.1.1.1:53`) to bypass system DNS.
+- **Pluggable Upstream**: Allows custom `DNSResolver` implementations for DoH (DNS over HTTPS), DoT (DNS over TLS), or any other DNS protocol.
 - **Zero Config**: Works out of the box with sensible defaults.
 
 ## Installation
@@ -91,6 +93,53 @@ You can also use the resolver directly to lookup IPs:
 ips, err := resolver.LookupHost(context.Background(), "example.com")
 // ips: ["93.184.216.34", ...]
 ```
+
+### Custom DNS Server
+
+You can specify a custom DNS server (e.g., Google Public DNS, Cloudflare DNS) instead of using the system default:
+
+```go
+resolver := dnscache.New(dnscache.Config{
+    DNSServer: "8.8.8.8:53", // Google Public DNS
+})
+
+// Or use Cloudflare DNS
+resolver := dnscache.New(dnscache.Config{
+    DNSServer: "1.1.1.1:53",
+})
+```
+
+### Custom Upstream Resolver (DoH, DoT, etc.)
+
+For advanced use cases like DNS over HTTPS (DoH) or DNS over TLS (DoT), you can provide your own upstream resolver implementation:
+
+```go
+// Implement the DNSResolver interface
+type DNSResolver interface {
+    LookupHost(ctx context.Context, host string) (addrs []string, err error)
+    LookupAddr(ctx context.Context, addr string) (names []string, err error)
+    LookupIP(ctx context.Context, network, host string) ([]net.IP, error)
+}
+
+// Example: Using a DoH library (pseudo-code)
+type DoHResolver struct {
+    client *doh.Client
+}
+
+func (r *DoHResolver) LookupHost(ctx context.Context, host string) ([]string, error) {
+    // Implement DoH lookup logic here
+    return r.client.Resolve(ctx, host)
+}
+
+// ... implement other methods ...
+
+// Use the custom resolver
+resolver := dnscache.New(dnscache.Config{
+    Upstream: &DoHResolver{client: doh.NewClient("https://dns.google/dns-query")},
+})
+```
+
+> **Note**: When both `Upstream` and `DNSServer` are specified, `Upstream` takes priority.
 
 ## IP Change Notifications
 
@@ -176,6 +225,16 @@ config := dnscache.Config{
     // It will directly call the underlying dialer, completely bypassing the cache.
     // Useful for testing or runtime toggles.
     Disabled: false,
+
+    // Custom DNS server address (e.g., "8.8.8.8:53", "1.1.1.1:53").
+    // If empty, uses the system default resolver.
+    // This option is ignored if Upstream is set.
+    DNSServer: "8.8.8.8:53",
+
+    // Custom upstream resolver implementation.
+    // Use this for DoH, DoT, or any custom DNS resolution logic.
+    // If nil, uses the system default resolver (or DNSServer if specified).
+    Upstream: myCustomResolver,
 }
 
 resolver := dnscache.New(config)
