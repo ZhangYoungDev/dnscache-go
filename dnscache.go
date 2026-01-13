@@ -140,13 +140,8 @@ func (r *ipVersionResolver) LookupAddr(ctx context.Context, addr string) ([]stri
 }
 
 func (r *ipVersionResolver) LookupIP(ctx context.Context, network, host string) ([]net.IP, error) {
-	// If the user asks for a specific network that conflicts with our forced network,
-	// we still use our forced network for the query, but filter the results.
-	// However, usually network is "ip", so we replace it with our forced version.
-	if network == "ip" {
-		network = r.network
-	}
-	return net.DefaultResolver.LookupIP(ctx, network, host)
+	// Always enforce our IP version constraint, ignoring the requested network.
+	return net.DefaultResolver.LookupIP(ctx, r.network, host)
 }
 
 // Refresh performs a cleanup of unused cache entries.
