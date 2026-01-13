@@ -10,6 +10,18 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
+// DialStrategy defines how the resolver iterates through IP addresses when dialing.
+type DialStrategy int
+
+const (
+	// DialStrategyRandom shuffles IPs randomly for load balancing (default).
+	DialStrategyRandom DialStrategy = iota
+	// DialStrategySequential tries IPs in DNS response order.
+	DialStrategySequential
+	// DialStrategyRoundRobin rotates through IPs in order across calls.
+	DialStrategyRoundRobin
+)
+
 // Config holds the configuration for the Resolver.
 type Config struct {
 	// Disabled controls whether the cache is disabled.
@@ -43,6 +55,10 @@ type Config struct {
 	// If specified, a background goroutine will periodically remove unused cache entries.
 	// You must call Stop() to stop the background goroutine.
 	CleanupInterval time.Duration
+
+	// DialStrategy controls how the resolver iterates through IP addresses when dialing.
+	// Default is DialStrategyRandom.
+	DialStrategy DialStrategy
 }
 
 // DNSResolver is the interface for the upstream DNS resolver.
@@ -68,7 +84,8 @@ type Resolver struct {
 	stop        chan struct{}
 	stopOnce    sync.Once
 
-	stats ResolverStats
+	stats   ResolverStats
+	rrIndex uint32 // for round-robin strategy
 }
 
 // Stats returns the current statistics of the resolver.

@@ -439,3 +439,94 @@ func TestOnChange(t *testing.T) {
 		t.Errorf("Expected changes to stay 2 (order change), got %d", atomic.LoadInt32(&changes))
 	}
 }
+
+func TestDialStrategy(t *testing.T) {
+	t.Run("Sequential", func(t *testing.T) {
+		r := New(Config{DialStrategy: DialStrategySequential})
+		ips := []string{"1.1.1.1", "2.2.2.2", "3.3.3.3"}
+
+		// Sequential should return in same order
+		result := r.applyDialStrategy(ips)
+		for i, ip := range ips {
+			if result[i] != ip {
+				t.Errorf("Sequential: expected %s at index %d, got %s", ip, i, result[i])
+			}
+		}
+	})
+
+	t.Run("RoundRobin", func(t *testing.T) {
+		r := New(Config{DialStrategy: DialStrategyRoundRobin})
+		ips := []string{"1.1.1.1", "2.2.2.2", "3.3.3.3"}
+
+		// First call should start at index 0
+		result1 := r.applyDialStrategy(ips)
+		if result1[0] != "1.1.1.1" {
+			t.Errorf("RoundRobin first call: expected 1.1.1.1 first, got %s", result1[0])
+		}
+
+		// Second call should start at index 1
+		result2 := r.applyDialStrategy(ips)
+		if result2[0] != "2.2.2.2" {
+			t.Errorf("RoundRobin second call: expected 2.2.2.2 first, got %s", result2[0])
+		}
+
+		// Third call should start at index 2
+		result3 := r.applyDialStrategy(ips)
+		if result3[0] != "3.3.3.3" {
+			t.Errorf("RoundRobin third call: expected 3.3.3.3 first, got %s", result3[0])
+		}
+
+		// Fourth call should wrap around to index 0
+		result4 := r.applyDialStrategy(ips)
+		if result4[0] != "1.1.1.1" {
+			t.Errorf("RoundRobin fourth call: expected 1.1.1.1 first, got %s", result4[0])
+		}
+	})
+
+	t.Run("Random", func(t *testing.T) {
+		r := New(Config{DialStrategy: DialStrategyRandom})
+		ips := []string{"1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4", "5.5.5.5"}
+
+		// Run multiple times and check that order varies
+		sameOrderCount := 0
+		for i := 0; i < 10; i++ {
+			result := r.applyDialStrategy(ips)
+			if len(result) != len(ips) {
+				t.Errorf("Random: expected %d IPs, got %d", len(ips), len(result))
+			}
+
+			// Check if order is same as original
+			isSame := true
+			for j, ip := range ips {
+				if result[j] != ip {
+					isSame = false
+					break
+				}
+			}
+			if isSame {
+				sameOrderCount++
+			}
+		}
+
+		// With 5 IPs and 10 runs, it's very unlikely to get same order more than 2 times
+		if sameOrderCount > 3 {
+			t.Errorf("Random: order was same as original %d/10 times, shuffle may not be working", sameOrderCount)
+		}
+	})
+
+	t.Run("Default is Random", func(t *testing.T) {
+		r := New(Config{}) // No strategy specified
+		if r.config.DialStrategy != DialStrategyRandom {
+			t.Errorf("Default strategy should be DialStrategyRandom (0), got %d", r.config.DialStrategy)
+		}
+	})
+
+	t.Run("Single IP unchanged", func(t *testing.T) {
+		r := New(Config{DialStrategy: DialStrategyRandom})
+		ips := []string{"1.1.1.1"}
+		result := r.applyDialStrategy(ips)
+		if len(result) != 1 || result[0] != "1.1.1.1" {
+			t.Errorf("Single IP should remain unchanged")
+		}
+	})
+}
