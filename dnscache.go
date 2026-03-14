@@ -147,28 +147,31 @@ func New(config Config) *Resolver {
 }
 
 // NewOnlyV4 creates a new Resolver that only resolves IPv4 addresses.
+// It wraps the configured upstream (custom Upstream, DNSServer, or system default)
+// to enforce IPv4-only resolution.
 func NewOnlyV4(config Config) *Resolver {
 	r := New(config)
-	r.upstream = &ipVersionResolver{network: "ip4"}
+	r.upstream = &ipVersionResolver{network: "ip4", upstream: r.upstream}
 	return r
 }
 
 // NewOnlyV6 creates a new Resolver that only resolves IPv6 addresses.
+// It wraps the configured upstream (custom Upstream, DNSServer, or system default)
+// to enforce IPv6-only resolution.
 func NewOnlyV6(config Config) *Resolver {
 	r := New(config)
-	r.upstream = &ipVersionResolver{network: "ip6"}
+	r.upstream = &ipVersionResolver{network: "ip6", upstream: r.upstream}
 	return r
 }
 
-// ipVersionResolver wraps net.DefaultResolver to enforce a specific IP version.
+// ipVersionResolver wraps a DNSResolver to enforce a specific IP version.
 type ipVersionResolver struct {
-	network string
+	network  string
+	upstream DNSResolver
 }
 
 func (r *ipVersionResolver) LookupHost(ctx context.Context, host string) ([]string, error) {
-	// LookupHost doesn't support forcing network, so we use LookupIP and convert back to strings
-	// This ensures we respect the IP version constraint at the DNS query level
-	ips, err := net.DefaultResolver.LookupIP(ctx, r.network, host)
+	ips, err := r.upstream.LookupIP(ctx, r.network, host)
 	if err != nil {
 		return nil, err
 	}
@@ -180,12 +183,11 @@ func (r *ipVersionResolver) LookupHost(ctx context.Context, host string) ([]stri
 }
 
 func (r *ipVersionResolver) LookupAddr(ctx context.Context, addr string) ([]string, error) {
-	return net.DefaultResolver.LookupAddr(ctx, addr)
+	return r.upstream.LookupAddr(ctx, addr)
 }
 
 func (r *ipVersionResolver) LookupIP(ctx context.Context, network, host string) ([]net.IP, error) {
-	// Always enforce our IP version constraint, ignoring the requested network.
-	return net.DefaultResolver.LookupIP(ctx, r.network, host)
+	return r.upstream.LookupIP(ctx, r.network, host)
 }
 
 // Refresh performs a cleanup of unused cache entries.

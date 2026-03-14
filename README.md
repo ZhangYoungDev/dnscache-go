@@ -45,8 +45,6 @@ This is the most common use case. By replacing the `DialContext` in `http.Transp
 package main
 
 import (
-	"context"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -69,22 +67,64 @@ func main() {
 }
 ```
 
-### Force IPv4 (TCP4)
+### With `http.Client` (IPv4 Only)
 
-If you need to establish a raw TCP connection using only IPv4 (e.g., for custom protocols or raw socket usage), you can call `DialContext` with "tcp4".
+Use `NewOnlyV4` to create a resolver that only queries A records (IPv4). All requests made by the client will only use IPv4 addresses.
+
+```go
+package main
+
+import (
+	"net/http"
+	"time"
+
+	"github.com/ZhangYoungDev/dnscache-go"
+)
+
+func main() {
+	resolver := dnscache.NewOnlyV4(dnscache.Config{})
+
+	transport := &http.Transport{
+		DialContext: resolver.DialContext,
+	}
+
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   10 * time.Second,
+	}
+
+	client.Get("http://example.com")
+}
+```
+
+> **Tip**: Similarly, use `NewOnlyV6` if you want IPv6-only resolution.
+
+### With Raw TCP Connection
+
+You can use `DialContext` to establish raw TCP connections with DNS caching and automatic failover.
 
 ```go
 resolver := dnscache.New(dnscache.Config{})
 
-// Establish a TCP connection to google.com:80 using IPv4 only
-// This will perform a DNS lookup for A records only, avoiding AAAA records.
-conn, err := resolver.DialContext(context.Background(), "tcp4", "google.com:80")
+conn, err := resolver.DialContext(context.Background(), "tcp", "google.com:80")
 if err != nil {
     // Handle error
 }
 defer conn.Close()
 
 // Use conn as a standard net.Conn...
+```
+
+To force IPv4 only, use `NewOnlyV4`. This ensures DNS queries only request A records, so the cache contains no unnecessary AAAA entries.
+
+```go
+resolver := dnscache.NewOnlyV4(dnscache.Config{})
+
+conn, err := resolver.DialContext(context.Background(), "tcp", "google.com:80")
+if err != nil {
+    // Handle error
+}
+defer conn.Close()
 ```
 
 ### Direct Lookup

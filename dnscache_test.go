@@ -231,32 +231,145 @@ func TestAutoCleanup(t *testing.T) {
 }
 
 func TestForceIPVersion(t *testing.T) {
-	// Test IPv4 Only
-	r4 := NewOnlyV4(Config{})
-	ips4, err := r4.LookupHost(context.Background(), "ipv6.google.com")
-	// ipv6.google.com normally only has AAAA record. If we force V4, we might get error or empty
-	// A better test is to lookup something with both (google.com) and verify format
-	if err == nil {
-		for _, ip := range ips4 {
-			if net.ParseIP(ip).To4() == nil {
-				t.Errorf("NewOnlyV4 returned IPv6 address: %s", ip)
-			}
+	t.Run("NewOnlyV4 passes ip4 network to upstream", func(t *testing.T) {
+		var gotNetwork string
+		mock := &mockDNSResolverFull{
+			lookupIPFunc: func(ctx context.Context, network, host string) ([]net.IP, error) {
+				gotNetwork = network
+				return []net.IP{net.ParseIP("1.2.3.4"), net.ParseIP("5.6.7.8")}, nil
+			},
 		}
-	}
 
-	// Test IPv6 Only
-	r6 := NewOnlyV6(Config{})
-	// localhost usually has ::1
-	ips6, err := r6.LookupHost(context.Background(), "google.com")
-	if err == nil {
-		for _, ip := range ips6 {
-			// To4() returns nil if it's not a valid v4 address (i.e. it is v6)
-			// Wait, To4 returns nil for IPv6.
+		r := NewOnlyV4(Config{Upstream: mock})
+		ips, err := r.LookupHost(context.Background(), "test.com")
+		if err != nil {
+			t.Fatalf("LookupHost failed: %v", err)
+		}
+		if gotNetwork != "ip4" {
+			t.Errorf("Expected network 'ip4', got '%s'", gotNetwork)
+		}
+		if len(ips) != 2 || ips[0] != "1.2.3.4" || ips[1] != "5.6.7.8" {
+			t.Errorf("Expected [1.2.3.4 5.6.7.8], got %v", ips)
+		}
+	})
+
+	t.Run("NewOnlyV6 passes ip6 network to upstream", func(t *testing.T) {
+		var gotNetwork string
+		mock := &mockDNSResolverFull{
+			lookupIPFunc: func(ctx context.Context, network, host string) ([]net.IP, error) {
+				gotNetwork = network
+				return []net.IP{net.ParseIP("2001:db8::1"), net.ParseIP("::1")}, nil
+			},
+		}
+
+		r := NewOnlyV6(Config{Upstream: mock})
+		ips, err := r.LookupHost(context.Background(), "test.com")
+		if err != nil {
+			t.Fatalf("LookupHost failed: %v", err)
+		}
+		if gotNetwork != "ip6" {
+			t.Errorf("Expected network 'ip6', got '%s'", gotNetwork)
+		}
+		if len(ips) != 2 {
+			t.Errorf("Expected 2 IPs, got %d: %v", len(ips), ips)
+		}
+		for _, ip := range ips {
 			if net.ParseIP(ip).To4() != nil {
 				t.Errorf("NewOnlyV6 returned IPv4 address: %s", ip)
 			}
 		}
-	}
+	})
+
+	t.Run("NewOnlyV4 respects custom Upstream", func(t *testing.T) {
+		var called bool
+		mock := &mockDNSResolverFull{
+			lookupIPFunc: func(ctx context.Context, network, host string) ([]net.IP, error) {
+				called = true
+				return []net.IP{net.ParseIP("10.0.0.1")}, nil
+			},
+		}
+
+		r := NewOnlyV4(Config{Upstream: mock})
+		_, err := r.LookupHost(context.Background(), "custom.test")
+		if err != nil {
+			t.Fatalf("LookupHost failed: %v", err)
+		}
+		if !called {
+			t.Error("Custom upstream was not called - NewOnlyV4 should respect Config.Upstream")
+		}
+	})
+
+	t.Run("NewOnlyV4 respects DNSServer config", func(t *testing.T) {
+		r := NewOnlyV4(Config{DNSServer: "8.8.8.8:53"})
+
+		ipvr, ok := r.upstream.(*ipVersionResolver)
+		if !ok {
+			t.Fatalf("Expected upstream to be *ipVersionResolver, got %T", r.upstream)
+		}
+		if _, ok := ipvr.upstream.(*net.Resolver); !ok {
+			t.Errorf("Expected inner upstream to be *net.Resolver (custom DNS), got %T", ipvr.upstream)
+		}
+	})
+
+	t.Run("NewOnlyV4 LookupIP also enforces ip4", func(t *testing.T) {
+		mock := &mockDNSResolverFull{
+			lookupIPFunc: func(ctx context.Context, network, host string) ([]net.IP, error) {
+				if network != "ip4" {
+					t.Errorf("Expected network 'ip4', got '%s'", network)
+				}
+				return []net.IP{net.ParseIP("1.2.3.4")}, nil
+			},
+		}
+
+		r := NewOnlyV4(Config{Upstream: mock})
+		ips, err := r.LookupIP(context.Background(), "ip", "test.com")
+		if err != nil {
+			t.Fatalf("LookupIP failed: %v", err)
+		}
+		if len(ips) != 1 {
+			t.Errorf("Expected 1 IP, got %d", len(ips))
+		}
+	})
+
+	t.Run("NewOnlyV4 caches results", func(t *testing.T) {
+		var callCount int32
+		mock := &mockDNSResolverFull{
+			lookupIPFunc: func(ctx context.Context, network, host string) ([]net.IP, error) {
+				atomic.AddInt32(&callCount, 1)
+				return []net.IP{net.ParseIP("1.2.3.4")}, nil
+			},
+		}
+
+		r := NewOnlyV4(Config{Upstream: mock, CacheTTL: time.Minute})
+		_, _ = r.LookupHost(context.Background(), "cache.test")
+		_, _ = r.LookupHost(context.Background(), "cache.test")
+
+		if atomic.LoadInt32(&callCount) != 1 {
+			t.Errorf("Expected 1 upstream call (cached), got %d", atomic.LoadInt32(&callCount))
+		}
+	})
+
+	t.Run("NewOnlyV6 LookupAddr passes through", func(t *testing.T) {
+		var called bool
+		mock := &mockDNSResolverFull{
+			lookupAddrFunc: func(ctx context.Context, addr string) ([]string, error) {
+				called = true
+				return []string{"host.example.com."}, nil
+			},
+		}
+
+		r := NewOnlyV6(Config{Upstream: mock})
+		names, err := r.LookupAddr(context.Background(), "::1")
+		if err != nil {
+			t.Fatalf("LookupAddr failed: %v", err)
+		}
+		if !called {
+			t.Error("Inner upstream LookupAddr was not called")
+		}
+		if len(names) != 1 || names[0] != "host.example.com." {
+			t.Errorf("Expected [host.example.com.], got %v", names)
+		}
+	})
 }
 
 func TestStats(t *testing.T) {

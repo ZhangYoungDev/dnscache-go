@@ -45,8 +45,6 @@ go get github.com/ZhangYoungDev/dnscache-go
 package main
 
 import (
-	"context"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -69,22 +67,64 @@ func main() {
 }
 ```
 
-### 强制 IPv4 (TCP4)
+### 配合 `http.Client` 使用（仅 IPv4）
 
-如果需要仅使用 IPv4 建立原始 TCP 连接（例如用于自定义协议或原始 socket 使用），可以使用 "tcp4" 调用 `DialContext`。
+使用 `NewOnlyV4` 创建仅查询 A 记录（IPv4）的解析器。客户端发出的所有请求都只会使用 IPv4 地址。
+
+```go
+package main
+
+import (
+	"net/http"
+	"time"
+
+	"github.com/ZhangYoungDev/dnscache-go"
+)
+
+func main() {
+	resolver := dnscache.NewOnlyV4(dnscache.Config{})
+
+	transport := &http.Transport{
+		DialContext: resolver.DialContext,
+	}
+
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   10 * time.Second,
+	}
+
+	client.Get("http://example.com")
+}
+```
+
+> **提示**：类似地，使用 `NewOnlyV6` 可以实现仅 IPv6 解析。
+
+### 原始 TCP 连接
+
+你可以使用 `DialContext` 建立带有 DNS 缓存和自动故障转移的原始 TCP 连接。
 
 ```go
 resolver := dnscache.New(dnscache.Config{})
 
-// 仅使用 IPv4 建立到 google.com:80 的 TCP 连接
-// 这将只执行 A 记录的 DNS 查询，避免 AAAA 记录。
-conn, err := resolver.DialContext(context.Background(), "tcp4", "google.com:80")
+conn, err := resolver.DialContext(context.Background(), "tcp", "google.com:80")
 if err != nil {
     // 处理错误
 }
 defer conn.Close()
 
 // 将 conn 作为标准 net.Conn 使用...
+```
+
+如需强制仅使用 IPv4，请使用 `NewOnlyV4`。这将确保 DNS 查询只请求 A 记录，缓存中不会包含多余的 AAAA 条目。
+
+```go
+resolver := dnscache.NewOnlyV4(dnscache.Config{})
+
+conn, err := resolver.DialContext(context.Background(), "tcp", "google.com:80")
+if err != nil {
+    // 处理错误
+}
+defer conn.Close()
 ```
 
 ### 直接查询
